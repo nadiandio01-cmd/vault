@@ -1,0 +1,90 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Create Flutter project around main.dart
+        run: |
+          cp lib/main.dart /tmp/main.dart
+          flutter create . --project-name vault --org com.example --platforms android
+          cp /tmp/main.dart lib/main.dart
+          flutter pub add image_picker path_provider shared_preferences timezone gal
+          flutter pub add flutter_local_notifications:^19.0.0
+
+      - name: Add native clock (Kotlin)
+        run: |
+          mkdir -p android/app/src/main/kotlin/com/example/vault
+          cat > android/app/src/main/kotlin/com/example/vault/MainActivity.kt <<'EOF'
+          package com.example.vault
+
+          import android.os.SystemClock
+          import io.flutter.embedding.android.FlutterActivity
+          import io.flutter.embedding.engine.FlutterEngine
+          import io.flutter.plugin.common.MethodChannel
+
+          class MainActivity : FlutterActivity() {
+              override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+                  super.configureFlutterEngine(flutterEngine)
+                  MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "vault/clock")
+                      .setMethodCallHandler { call, result ->
+                          if (call.method == "elapsed") result.success(SystemClock.elapsedRealtime())
+                          else result.notImplemented()
+                      }
+              }
+          }
+          EOF
+
+      - name: Patch manifest and Gradle
+        run: |
+          python3 - <<'EOF'
+          m = "android/app/src/main/AndroidManifest.xml"
+          s = open(m).read()
+          perms = '''<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
+              <application'''
+          s = s.replace("<application", perms, 1)
+          recv = '''</activity>
+              <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"/>
+              <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
+                <intent-filter>
+                  <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                  <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                  <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
+                  <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
+                </intent-filter>
+              </receiver>'''
+          s = s.replace("</activity>", recv, 1)
+          open(m, "w").write(s)
+
+          g = "android/app/build.gradle.kts"
+          t = open(g).read()
+          t = t.replace("flutter.minSdkVersion", "24")
+          t = t.replace("compileOptions {", "compileOptions {\n        isCoreLibraryDesugaringEnabled = true", 1)
+          t += '\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n'
+          open(g, "w").write(t)
+          EOF
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vault-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
