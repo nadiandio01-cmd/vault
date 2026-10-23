@@ -24,7 +24,7 @@ jobs:
           cp lib/main.dart /tmp/main.dart
           flutter create . --project-name vault --org com.example --platforms android
           cp /tmp/main.dart lib/main.dart
-          flutter pub add image_picker path_provider shared_preferences timezone gal
+          flutter pub add image_picker path_provider shared_preferences gal timezone:^0.10.0
           flutter pub add flutter_local_notifications:^19.0.0
 
       - name: Add native clock (Kotlin)
